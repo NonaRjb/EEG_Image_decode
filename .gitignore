@@ -27,3 +27,13 @@ Retrieval/Outputs
 Retrieval/sliding_window_outputs
 Retrieval/Visualize
 Retrieval/wandb
+outputs/
+embeddings/
+logs/
+wandb/
+*.png
+*.jpg
+*/__pycache__
+*/*/__pycache__/
+models/
+

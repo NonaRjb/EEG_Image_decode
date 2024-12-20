@@ -10,22 +10,28 @@ from PIL import Image
 import requests
 
 import os
-proxy = 'http://127.0.0.1:7890'
-os.environ['http_proxy'] = proxy
-os.environ['https_proxy'] = proxy
+# proxy = 'http://127.0.0.1:7890'
+# os.environ['http_proxy'] = proxy
+# os.environ['https_proxy'] = proxy
 cuda_device_count = torch.cuda.device_count()
 print(cuda_device_count)
 device = "cuda:0" if torch.cuda.is_available() else "cpu"
 # vlmodel, preprocess = clip.load("ViT-B/32", device=device)
-model_type = 'ViT-H-14'
+# model_type = 'ViT-B-32'
+# precompute_model = 'dreamsim_clip_vitb32'
+pretrained_encoder={
+    'ViT-B-32': 'laion2b_s34b_b79k',
+    'ViT-L-14': 'laion2b_s32b_b82k',
+    'ViT-H-14': 'laion2b_s32b_b79k',
+}
 import open_clip
-vlmodel, preprocess_train, feature_extractor = open_clip.create_model_and_transforms(
-    model_type, pretrained='laion2b_s32b_b79k', precision='fp32', device = device)
+# vlmodel, preprocess_train, feature_extractor = open_clip.create_model_and_transforms(
+#     model_type, pretrained=pretrained_encoder[model_type], precision='fp32', device = device)
 
 import json
 
 # Load the configuration from the JSON file
-config_path = "data_config.json"
+config_path = "/proj/rep-learning-robotics/users/x_nonra/EEG_Image_decode/Retrieval/data_config.json"
 with open(config_path, "r") as config_file:
     config = json.load(config_file)
 
@@ -33,13 +39,16 @@ with open(config_path, "r") as config_file:
 data_path = config["data_path"]
 img_directory_training = config["img_directory_training"]
 img_directory_test = config["img_directory_test"]
+img_directory_alt = config["img_directory_alt"]
+embedding_directory = config["embedding_path"]
 
 
 class EEGDataset():
     """
     subjects = ['sub-01', 'sub-02', 'sub-05', 'sub-04', 'sub-03', 'sub-06', 'sub-07', 'sub-08', 'sub-09', 'sub-10']
     """
-    def __init__(self, data_path, exclude_subject=None, subjects=None, train=True, time_window=[0, 1.0], classes = None, pictures = None, val_size=None):
+    def __init__(self, data_path, exclude_subject=None, subjects=None, train=True, time_window=[0, 1.0], precompute_img=False, 
+                precompute_model_name='dreamsim_clip_vitb32', model_type='ViT-B-32', average_repetitions=False, classes = None, pictures = None, val_size=None):
         self.data_path = data_path
         self.train = train
         self.subject_list = os.listdir(data_path)
@@ -51,23 +60,42 @@ class EEGDataset():
         self.pictures = pictures
         self.exclude_subject = exclude_subject  
         self.val_size = val_size
+        self.average_repetitions = average_repetitions
         # assert any subjects in subject_list
         assert any(sub in self.subject_list for sub in self.subjects)
 
-        self.data, self.labels, self.text, self.img = self.load_data()
-        
+        self.data, self.labels, self.text, self.img = self.load_data(precompute_embeddings=precompute_img, model_name=precompute_model_name, average_repetitions=average_repetitions)
         self.data = self.extract_eeg(self.data, time_window)
+
+        if len(self.img) == 0:
+            split = 'train' if self.train else 'test'
+            self.img = [os.path.join(img_directory_alt, f"{split}_{precompute_model_name}.npy")] 
         
+        device = "cuda:0" if torch.cuda.is_available() else "cpu"
+
+        self.vlmodel, self.preprocess_train, self.feature_extractor = open_clip.create_model_and_transforms(
+            model_type, pretrained=pretrained_encoder[model_type], precision='fp32', device = device)
         
         if self.classes is None and self.pictures is None:
             # Try to load the saved features if they exist
-            features_filename = os.path.join(f'{model_type}_features_train.pt') if self.train else os.path.join(f'{model_type}_features_test.pt')
+            features_filename = os.path.join(embedding_directory, f'{model_type}_features_train.pt' if self.train else f'{model_type}_features_test.pt')
             
-            if os.path.exists(features_filename) :
+            if precompute_img:
+                print(f"Load features from {precompute_model_name} and Extracting text features for {model_type}")
+                self.img_features = np.array([np.load(img) for img in self.img])
+                self.img_features = torch.from_numpy(self.img_features.squeeze()).to(device)
+                self.text_features = self.Textencoder(self.text)
+                print("text_features shape:", self.text_features.shape)
+                print("img_features shape:", self.img_features.shape)
+            elif os.path.exists(features_filename):
+                print(f"Loading saved features from {features_filename}")
                 saved_features = torch.load(features_filename)
                 self.text_features = saved_features['text_features']
                 self.img_features = saved_features['img_features']
+                print("text_features shape:", self.text_features.shape)
+                print("img_features shape:", self.img_features.shape)
             else:
+                print(f"Extracting features for {model_type}")
                 self.text_features = self.Textencoder(self.text)
                 self.img_features = self.ImageEncoder(self.img)
                 torch.save({
@@ -78,7 +106,7 @@ class EEGDataset():
             self.text_features = self.Textencoder(self.text)
             self.img_features = self.ImageEncoder(self.img)
             
-    def load_data(self):
+    def load_data(self, **kwargs):
         data_list = []
         label_list = []
         texts = []
@@ -113,7 +141,10 @@ class EEGDataset():
             img_directory = img_directory_test
         
         all_folders = [d for d in os.listdir(img_directory) if os.path.isdir(os.path.join(img_directory, d))]
-        all_folders.sort()  
+        if all_folders is not None:
+            all_folders.sort()  
+        else:
+            print("There are only files!")
 
         if self.classes is not None and self.pictures is not None:
             images = []  
@@ -138,16 +169,19 @@ class EEGDataset():
                     all_images.sort()
                     images.extend(os.path.join(folder_path, img) for img in all_images)
         elif self.classes is None:
-            images = []  
+            images = []
             for folder in all_folders:
                 folder_path = os.path.join(img_directory, folder)
-                all_images = [img for img in os.listdir(folder_path) if img.lower().endswith(('.png', '.jpg', '.jpeg'))]
+                if kwargs['precompute_embeddings']:
+                    all_images = [img for img in os.listdir(folder_path) if img.lower().endswith((f'{kwargs["model_name"]}.npy'))]
+                else:
+                    all_images = [img for img in os.listdir(folder_path) if img.lower().endswith(('.png', '.jpg', '.jpeg'))]
                 all_images.sort()  
                 images.extend(os.path.join(folder_path, img) for img in all_images)
         else:
-            
             print("Error")
-            
+        if kwargs['precompute_embeddings']:
+            print("Embeddings loaded from precompute_embeddings")    
         print("self.subjects", self.subjects)
         print("exclude_subject", self.exclude_subject)
         for subject in self.subjects:
@@ -191,7 +225,8 @@ class EEGDataset():
                         #     preprocessed_eeg_data_class = preprocessed_eeg_data[start_index: start_index+samples_per_class]
                         # else:
                         preprocessed_eeg_data_class = preprocessed_eeg_data[start_index: start_index+samples_per_class]
-                        # print("preprocessed_eeg_data_class", preprocessed_eeg_data_class.shape)
+                        if kwargs['average_repetitions']:
+                            preprocessed_eeg_data_class = torch.mean(preprocessed_eeg_data_class, 1)
                         # preprocessed_eeg_data_class = torch.mean(preprocessed_eeg_data_class, 1)
                         # preprocessed_eeg_data_class = torch.mean(preprocessed_eeg_data_class, 0)
                         # print("preprocessed_eeg_data_class", preprocessed_eeg_data_class.shape)
@@ -217,7 +252,6 @@ class EEGDataset():
                             continue
                         start_index = i * samples_per_class  # Update start_index for each class
                         preprocessed_eeg_data_class = preprocessed_eeg_data[start_index:start_index+samples_per_class]
-                        # print("preprocessed_eeg_data_class", preprocessed_eeg_data_class.shape)
                         labels = torch.full((samples_per_class,), i, dtype=torch.long).detach()  # Add class labels
                         preprocessed_eeg_data_class = torch.mean(preprocessed_eeg_data_class.squeeze(0), 0)
                         # print("preprocessed_eeg_data_class", preprocessed_eeg_data_class.shape)
@@ -230,8 +264,11 @@ class EEGDataset():
         # data_list = np.mean(data_list, )
         # print("data_list", len(data_list))
         if self.train:
-            # print("data_list", *data_list[0].shape[1:])            
-            data_tensor = torch.cat(data_list, dim=0).view(-1, *data_list[0].shape[2:])                 
+            # print("data_list", *data_list[0].shape[1:])   
+            if self.average_repetitions:
+                data_tensor = torch.cat(data_list, dim=0).view(-1, *data_list[0].shape[1:])
+            else:         
+                data_tensor = torch.cat(data_list, dim=0).view(-1, *data_list[0].shape[2:])                 
             # data_tensor = torch.cat(data_list, dim=0).view(-1, *data_list[0].shape[1:])
             # data_tensor = torch.cat(data_list, dim=0).view(-1, *data_list[0].shape)   
             # print("label_tensor", label_tensor.shape)
@@ -241,6 +278,7 @@ class EEGDataset():
             # label_tensor = torch.cat(label_list, dim=0)
             # print("label_tensor", label_tensor.shape)
             # data_tensor = torch.cat(data_list, dim=0).view(-1, *data_list[0].shape[2:])
+            print("data_tensor", data_tensor.shape)
         # print("data_tensor", data_tensor.shape)
         # label_list: (subjects * classes) * 10
         # label_tensor: (subjects * classes * 10)
@@ -251,7 +289,8 @@ class EEGDataset():
         # print(label_tensor[:300])
         if self.train:
             # label_tensor: (subjects * classes * 10 * 4)
-            label_tensor = label_tensor.repeat_interleave(4)
+            if not kwargs['average_repetitions']:
+                label_tensor = label_tensor.repeat_interleave(4)
             if self.classes is not None:
                 unique_values = list(label_tensor.numpy())
                 lis = []
@@ -301,7 +340,7 @@ class EEGDataset():
             # print("text_inputs", text_inputs)
             
             with torch.no_grad():
-                text_features = vlmodel.encode_text(text_inputs)
+                text_features = self.vlmodel.encode_text(text_inputs)
             
             text_features = F.normalize(text_features, dim=-1).detach()
        
@@ -313,10 +352,10 @@ class EEGDataset():
       
         for i in range(0, len(images), batch_size):
             batch_images = images[i:i + batch_size]
-            image_inputs = torch.stack([preprocess_train(Image.open(img).convert("RGB")) for img in batch_images]).to(device)
+            image_inputs = torch.stack([self.preprocess_train(Image.open(img).convert("RGB")) for img in batch_images]).to(device)
 
             with torch.no_grad():
-                batch_image_features = vlmodel.encode_image(image_inputs)
+                batch_image_features = self.vlmodel.encode_image(image_inputs)
                 batch_image_features /= batch_image_features.norm(dim=-1, keepdim=True)
 
             image_features_list.append(batch_image_features)
@@ -340,12 +379,18 @@ class EEGDataset():
                 index_n_sub_train = len(self.classes)* 10 * 4
             # text_index: classes
             if self.train:
-                text_index = (index % index_n_sub_train) // (10 * 4)
+                if self.average_repetitions:
+                    text_index = index // 10
+                else:
+                    text_index = (index % index_n_sub_train) // (10 * 4)
             else:
                 text_index = (index % index_n_sub_test)
             # img_index: classes * 10
             if self.train:
-                img_index = (index % index_n_sub_train) // (4)
+                if self.average_repetitions:
+                    img_index = index
+                else:
+                    img_index = (index % index_n_sub_train) // (4)
             else:
                 img_index = (index % index_n_sub_test)
         else:
@@ -369,7 +414,7 @@ class EEGDataset():
         # print("self.text", self.text)
         # print("self.text", len(self.text))
         text = self.text[text_index]
-        img = self.img[img_index]
+        img = self.img[img_index] if len(self.img) > 1 else self.img[0]
         
         text_features = self.text_features[text_index]
         img_features = self.img_features[img_index]

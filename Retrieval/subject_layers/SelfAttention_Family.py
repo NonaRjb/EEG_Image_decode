@@ -1,8 +1,12 @@
+import sys 
+sys.path.append("/proj/rep-learning-robotics/users/x_nonra/EEG_Image_decode/Retrieval")
+print(sys.path)
+
 import torch
 import torch.nn as nn
 import numpy as np
 from math import sqrt
-from utils.masking import TriangularCausalMask, ProbMask
+from Retrieval.utils.masking import TriangularCausalMask, ProbMask
 from reformer_pytorch import LSHSelfAttention
 from einops import rearrange, repeat
 
@@ -241,6 +245,45 @@ class ReformerLayer(nn.Module):
         B, N, C = queries.shape
         queries = self.attn(self.fit_length(queries))[:, :N, :]
         return queries, None
+# class ReformerLayer(nn.Module):
+#     def __init__(self, d_model, n_heads, d_keys=None, d_values=None, causal=False):
+#         super().__init__()
+#         self.attn = nn.MultiheadAttention(embed_dim=d_model, num_heads=n_heads, batch_first=True)
+#         self.causal = causal
+#         self.mask = None  # Attention mask, only used if `causal=True`
+
+#     def generate_causal_mask(self, seq_len, device):
+#         """
+#         Generates a causal mask for self-attention to prevent future time-step attention.
+#         """
+#         mask = torch.triu(torch.ones(seq_len, seq_len, device=device), diagonal=1)
+#         return mask.bool()
+
+#     def fit_length(self, queries):
+#         """
+#         Ensure the input sequence length is compatible if padding is required.
+#         """
+#         return queries  # No padding is necessary for MultiheadAttention
+
+#     def forward(self, queries, keys, values, attn_mask=None, tau=None, delta=None):
+#         """
+#         Forward pass for the self-attention layer.
+#         """
+#         B, N, C = queries.shape
+        
+#         # Generate causal mask if required
+#         if self.causal:
+#             if self.mask is None or self.mask.size(0) != N:
+#                 self.mask = self.generate_causal_mask(N, queries.device)
+#             attn_mask = self.mask
+
+#         # Standard self-attention
+#         # MultiheadAttention expects (seq_len, batch_size, embed_dim) if batch_first=False
+#         # But we use batch_first=True for (batch_size, seq_len, embed_dim)
+#         queries = self.fit_length(queries)
+#         output, _ = self.attn(queries, keys, values, attn_mask=attn_mask)
+        
+#         return output, None
 
 
 class TwoStageAttentionLayer(nn.Module):
