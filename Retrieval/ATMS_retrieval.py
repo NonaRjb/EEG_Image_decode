@@ -175,14 +175,14 @@ class Proj_eeg(nn.Sequential):
 
 
 class ATMS(nn.Module):    
-    def __init__(self, num_channels=63, sequence_length=250, num_subjects=2, num_features=64, num_latents=1024, num_blocks=1):
+    def __init__(self, num_channels=63, sequence_length=250, num_subjects=2, num_features=64, num_latents=1024, num_blocks=1, temp=0.07):
         super(ATMS, self).__init__()
         default_config = Config()
         self.encoder = iTransformer(default_config)   
         self.subject_wise_linear = nn.ModuleList([nn.Linear(default_config.d_model, sequence_length) for _ in range(num_subjects)])
         self.enc_eeg = Enc_eeg()
         self.proj_eeg = Proj_eeg(proj_dim=num_latents)        
-        self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
+        self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / temp))
         self.loss_func = ClipLoss()       
          
     def forward(self, x, subject_ids):
@@ -207,7 +207,7 @@ def validate_model(sub, eeg_model, dataloader, device, config):
     total_loss = 0
     correct = 0
     total = 0
-    alpha = 0.99
+    alpha = 1.0
     with torch.no_grad():
         for batch_idx, (eeg_data, labels, text, text_features, img, img_features) in enumerate(dataloader):
             eeg_data = eeg_data.to(device)
@@ -253,7 +253,7 @@ def train_model(sub, eeg_model, dataloader, optimizer, device, config):
     total_loss = 0
     correct = 0
     total = 0
-    alpha=0.99
+    alpha=1.0
     features_list = []  # List to store features
     save_features= True
     for batch_idx, (eeg_data, labels, text, text_features, img, img_features) in enumerate(dataloader):
@@ -315,7 +315,7 @@ def evaluate_model(sub, eeg_model, dataloader, device, text_features_all, img_fe
     total_loss = 0
     correct = 0
     total = 0
-    alpha = 0.99
+    alpha = 1.0
     top5_correct = 0
     top5_correct_count = 0
     # Get all unique classes
@@ -604,6 +604,7 @@ def main():
     parser.add_argument('--device', type=str, choices=['cpu', 'gpu'], default='gpu', help='Device to run on (cpu or gpu)')    
     parser.add_argument('--insubject', type=bool, default=True, help='In-subject mode or cross-subject mode')
     parser.add_argument('--encoder_type', type=str, default='ATMS', help='Encoder type')
+    parser.add_argument('--temperature', type=float, default=0.07, help='Temperature parameter for contrastive loss')
     parser.add_argument('--subjects', nargs='+', default=['sub-01', 'sub-02', 'sub-03', 'sub-04', 'sub-05', 'sub-06', 'sub-07', 'sub-08', 'sub-09', 'sub-10'], help='List of subject IDs (default: sub-01 to sub-10)')    
     parser.add_argument('--seed', type=int, default=42, help='Random seed')
     args = parser.parse_args()
@@ -620,7 +621,7 @@ def main():
     current_time = datetime.datetime.now().strftime("%m-%d_%H-%M")
 
     for sub in subjects:
-        eeg_model = globals()[args.encoder_type](num_latents=embed_dim[args.img_model_type])
+        eeg_model = globals()[args.encoder_type](num_latents=embed_dim[args.img_model_type], temp=args.temperature)
         eeg_model.to(device)
 
         optimizer = AdamW(itertools.chain(eeg_model.parameters()), lr=args.lr)
@@ -654,10 +655,10 @@ def main():
 
         if args.insubject:
             results_file = f"{results_dir}/{args.encoder_type}_{sub}.csv"
-            best_results_file = f"{results_dir}/{args.precompute_model_name}_best_{sub}.pkl"
+            best_results_file = f"{results_dir}/{args.precompute_model_name}_seed{args.seed}.pkl"
         else:
             results_file = f"{results_dir}/{args.encoder_type}_cross_exclude_{sub}.csv"
-            best_results_file = f"{results_dir}/{args.precompute_model_name}_cross_best_exclude_{sub}.pkl"
+            best_results_file = f"{results_dir}/{args.precompute_model_name}_cross_seed{args.seed}.pkl"
 
         with open(results_file, 'w', newline='') as file:
             writer = csv.DictWriter(file, fieldnames=results[0].keys())

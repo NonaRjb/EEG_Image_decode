@@ -1,8 +1,8 @@
 {
-    "data_path": "/proj/rep-learning-robotics/users/x_nonra/eeg_asif_img/data/things_eeg_2/Preprocessed_data_250Hz",
-    "img_directory_training": "/proj/rep-learning-robotics/users/x_nonra/eeg_asif_img/data/things_eeg_2/images/training_images",
-    "img_directory_test": "/proj/rep-learning-robotics/users/x_nonra/eeg_asif_img/data/things_eeg_2/images/test_images",
-    "img_directory_alt": "/proj/rep-learning-robotics/users/x_nonra/alignvis/data/things_eeg_img_embeddings",
+    "data_path": "/proj/rep-learning-robotics/users/x_nonra/alignvis/data/things_eeg_2/Preprocessed_data_250Hz",
+    "img_directory_training": "/proj/rep-learning-robotics/users/x_nonra/alignvis/data/things_eeg_2/images/training_images",
+    "img_directory_test": "/proj/rep-learning-robotics/users/x_nonra/alignvis/data/things_eeg_2/images/test_images",
+    "img_directory_alt": "/proj/rep-learning-robotics/users/x_nonra/alignvis/data/things_eeg_img_embeddings/gLocal_test",
     "features_path":"/home/ldy/Workspace/THINGS/CLIP",
     "embedding_path":"/proj/rep-learning-robotics/users/x_nonra/EEG_Image_decode/embeddings"
 }
